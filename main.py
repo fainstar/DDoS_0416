@@ -15,6 +15,7 @@ import torch
 import argparse
 import matplotlib.pyplot as plt
 from matplotlib import font_manager, rc
+import psutil
 
 # 設定中文字型
 font_path = "TFT/MSGOTHIC.TTF"
@@ -67,6 +68,12 @@ def set_seed(seed):
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
+
+
+def get_memory_usage():
+    """獲取當前進程的記憶體使用情況"""
+    process = psutil.Process()
+    return process.memory_info().rss / 1024 / 1024  # 轉換為 MB
 
 
 def train_ddos_model(args):
@@ -235,48 +242,64 @@ def compare_models(args):
     print(f"\n{'='*50}")
     print("DDoS 攻擊檢測系統 - 模型比較模式")
     print(f"{'='*50}")
-    
+
     # 保存原始參數
     original_model_type = args.model_type
     original_model_path = args.model_path
-    
+
     model_types = ['mamba', 'cnnlstm']
     model_paths = ['mamba_model.pth', 'cnnlstm_model.pth']
     model_results = {}
-    
+
     # 依次訓練並評估每個模型
     for i, model_type in enumerate(model_types):
         print(f"\n{'='*50}")
         print(f"訓練模型 {model_type.upper()}")
         print(f"{'='*50}")
-        
+
         # 更新模型類型和保存路徑
         args.model_type = model_type
         args.model_path = model_paths[i]
-        
+
+        # 記錄開始時間和記憶體
+        start_time = time.time()
+        start_memory = get_memory_usage()
+
         # 訓練模型
         _, results = train_ddos_model(args)
-        
+
+        # 記錄結束時間和記憶體
+        end_time = time.time()
+        end_memory = get_memory_usage()
+
         if results is not None:
             model_results[model_type] = results
-    
+            model_results[model_type].update({
+                'time': end_time - start_time,
+                'memory_change': end_memory - start_memory
+            })
+
     # 恢復原始參數
     args.model_type = original_model_type
     args.model_path = original_model_path
-    
+
     # 生成比較圖表
+    from plots_generator import create_comparison_charts, create_performance_comparison_chart
     create_comparison_charts(model_results)
-    
+    create_performance_comparison_chart(model_results)
+
     # 輸出比較結果摘要
     print("\n模型性能比較摘要:")
     for model_type, results in model_results.items():
         print(f"\n{model_type.upper()} 模型:")
+        print(f"  訓練時間: {results['time']:.2f} 秒")
+        print(f"  記憶體變化: {results['memory_change']:.2f} MB")
         print(f"  準確率 (Accuracy): {results['accuracy']:.4f}")
         print(f"  精確率 (Precision): {results['precision']:.4f}")
         print(f"  召回率 (Recall): {results['recall']:.4f}")
         print(f"  F1 分數: {results['f1']:.4f}")
         print(f"  誤報率 (FPR): {results['fpr']:.4f}")
-    
+
     return model_results
 
 
