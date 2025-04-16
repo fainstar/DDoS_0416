@@ -14,6 +14,8 @@ import time
 import os
 import matplotlib.pyplot as plt
 from matplotlib import font_manager, rc
+import gc
+import torch
 
 # 設定中文字型
 font_path = "TFT/MSGOTHIC.TTF"
@@ -25,9 +27,35 @@ def get_memory_usage():
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / 1024 / 1024  # 轉換為MB
 
+def clear_memory():
+    """清理記憶體，釋放未使用的資源"""
+    # 記錄清理前的記憶體使用量
+    before_clear = get_memory_usage()
+    
+    # 清理 Python 的垃圾回收
+    gc.collect()
+    
+    # 如果有 CUDA 可用，清理 GPU 記憶體
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    # 記錄清理後的記憶體使用量
+    after_clear = get_memory_usage()
+    memory_freed = before_clear - after_clear
+    
+    if memory_freed > 0:
+        print(f"記憶體清理完成：釋放 {memory_freed:.2f} MB")
+    else:
+        print("記憶體清理完成：無可釋放空間")
+
 def train_model(model, train_loader, val_loader, criterion=None, optimizer=None, 
                epochs=10, device='cuda', model_save_path=None):
     """訓練 DDoS 檢測模型"""
+    
+    print("開始清理記憶體...")
+    clear_memory()
+    initial_memory = get_memory_usage()
+    print(f"初始記憶體使用量: {initial_memory:.2f} MB")
     
     # 如果未提供損失函數和優化器，則創建默認值
     if criterion is None:
@@ -62,7 +90,7 @@ def train_model(model, train_loader, val_loader, criterion=None, optimizer=None,
         train_loss = 0.0
         epoch_start_time = time.time()
         
-        for inputs, labels in train_loader:
+        for batch_idx, (inputs, labels) in enumerate(train_loader):
             inputs, labels = inputs.to(device), labels.to(device)
             
             # 清除梯度
@@ -83,10 +111,12 @@ def train_model(model, train_loader, val_loader, criterion=None, optimizer=None,
             train_loss += loss.item() * inputs.size(0)
             
             # 記錄記憶體使用
+            current_memory = get_memory_usage()
             memory_usage.append({
                 'epoch': epoch + 1,
+                'batch': batch_idx,
                 'stage': 'training',
-                'memory_mb': get_memory_usage(),
+                'memory_mb': current_memory,
                 'time': time.time() - start_time
             })
         

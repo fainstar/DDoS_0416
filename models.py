@@ -91,8 +91,10 @@ class CNNLSTMModel(nn.Module):
         # CNN 層
         self.conv1 = nn.Conv1d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv1d(64, 128, kernel_size=3, padding=1)  # 新增
+        self.residual = nn.Conv1d(32, 64, kernel_size=1)  # shortcut 讓維度對齊
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
-        self.dropout1 = nn.Dropout(0.3)
+        self.dropout1 = nn.Dropout(0.4)
         
         # 計算卷積後的序列長度
         cnn_out_len = seq_len // 2  # 經過池化層後長度減半
@@ -101,9 +103,9 @@ class CNNLSTMModel(nn.Module):
         self.lstm = nn.LSTM(
             input_size=64,
             hidden_size=hidden_dim,
-            num_layers=2,
+            num_layers=3,
             batch_first=True,
-            dropout=0.2,
+            dropout=0.4,
             bidirectional=True
         )
         
