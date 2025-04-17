@@ -11,10 +11,23 @@ import torch.nn.functional as F
 from mambapy.mamba import Mamba, MambaConfig
 
 
+def count_parameters(model):
+    """計算模型的參數量
+    Args:
+        model: PyTorch 模型
+    Returns:
+        total_params: 總參數量
+        trainable_params: 可訓練參數量
+    """
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return total_params, trainable_params
+
+
 class DDoSDetectionModel(nn.Module):
     """基於 Mamba 的 DDoS 攻擊檢測模型"""
     
-    def __init__(self, input_dim, hidden_dim=128, output_dim=1):
+    def __init__(self, input_dim, hidden_dim=256, output_dim=1):
         super(DDoSDetectionModel, self).__init__()
         
         # 模型結構
@@ -23,10 +36,10 @@ class DDoSDetectionModel(nn.Module):
         # 使用 MambaConfig 來配置 Mamba 模型
         mamba_config = MambaConfig(
             d_model=hidden_dim,
-            d_state=16,
-            d_conv=8    ,
-            expand_factor=2,
-            n_layers=2
+            d_state=32,  # 增加狀態空間維度
+            d_conv=16,   # 增加卷積維度
+            expand_factor=4,
+            n_layers=4   # 增加層數
         )
         
         # 使用 config 對象來初始化 Mamba
@@ -180,13 +193,33 @@ def create_model(model_type, input_dim):
     """根據指定的模型類型創建模型實例"""
     if model_type == 'mamba':
         try:
-            return DDoSDetectionModel(input_dim=input_dim)
+            model = DDoSDetectionModel(input_dim=input_dim)
+            total_params, trainable_params = count_parameters(model)
+            print(f"\n{model_type.upper()} 模型參數統計：")
+            print(f"總參數量: {total_params:,}")
+            print(f"可訓練參數量: {trainable_params:,}")
+            return model
         except Exception as e:
             print(f"無法創建 Mamba 模型: {str(e)}，使用 DNN 替代")
-            return DeepNeuralNetDDoSModel(input_dim=input_dim)
+            model = DeepNeuralNetDDoSModel(input_dim=input_dim)
+            total_params, trainable_params = count_parameters(model)
+            print(f"\nDNN 模型參數統計：")
+            print(f"總參數量: {total_params:,}")
+            print(f"可訓練參數量: {trainable_params:,}")
+            return model
     elif model_type == 'cnnlstm':
-        return CNNLSTMModel(input_dim=input_dim)
+        model = CNNLSTMModel(input_dim=input_dim)
+        total_params, trainable_params = count_parameters(model)
+        print(f"\n{model_type.upper()} 模型參數統計：")
+        print(f"總參數量: {total_params:,}")
+        print(f"可訓練參數量: {trainable_params:,}")
+        return model
     elif model_type == 'dnn':
-        return DeepNeuralNetDDoSModel(input_dim=input_dim)
+        model = DeepNeuralNetDDoSModel(input_dim=input_dim)
+        total_params, trainable_params = count_parameters(model)
+        print(f"\n{model_type.upper()} 模型參數統計：")
+        print(f"總參數量: {total_params:,}")
+        print(f"可訓練參數量: {trainable_params:,}")
+        return model
     else:
         raise ValueError(f"不支持的模型類型: {model_type}")

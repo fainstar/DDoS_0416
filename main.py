@@ -24,7 +24,7 @@ rc('font', family=prop.get_name())
 
 # 導入自定義模塊
 from data_processor import load_network_data, preprocess_data, prepare_data_loaders
-from models import create_model
+from models import create_model, count_parameters
 from trainer import train_model, evaluate_model
 from test import load_trained_model, real_time_prediction
 from plots_generator import create_comparison_charts
@@ -90,7 +90,7 @@ def train_ddos_model(args):
     
     # 如果指定了最大樣本數，進行采樣
     if args.max_samples > 0 and len(X) > args.max_samples:
-        print(f"為了提高效率，隨機抽樣 {args.max_samples} 條數據...")
+        print(f"為了提高效率，順序抽樣 {args.max_samples} 條數據...")
         indices = np.random.choice(len(X), args.max_samples, replace=False)
         X = X[indices]
         y = y[indices]
@@ -265,8 +265,14 @@ def compare_models(args):
         start_time = time.time()
         start_memory = get_memory_usage()
 
-        # 訓練模型
-        _, results = train_ddos_model(args)
+        # 訓練模型並獲取模型實例和結果
+        model, results = train_ddos_model(args)
+
+        # 計算模型參數量
+        if model is not None:
+            total_params, trainable_params = count_parameters(model)
+        else:
+            total_params = trainable_params = 0
 
         # 記錄結束時間和記憶體
         end_time = time.time()
@@ -276,7 +282,9 @@ def compare_models(args):
             model_results[model_type] = results
             model_results[model_type].update({
                 'time': end_time - start_time,
-                'memory_change': end_memory - start_memory
+                'memory_change': end_memory - start_memory,
+                'total_params': total_params,
+                'trainable_params': trainable_params
             })
 
     # 恢復原始參數
@@ -294,6 +302,8 @@ def compare_models(args):
         print(f"\n{model_type.upper()} 模型:")
         print(f"  訓練時間: {results['time']:.2f} 秒")
         print(f"  記憶體變化: {results['memory_change']:.2f} MB")
+        print(f"  總參數量: {results['total_params']:,}")
+        print(f"  可訓練參數量: {results['trainable_params']:,}")
         print(f"  準確率 (Accuracy): {results['accuracy']:.4f}")
         print(f"  精確率 (Precision): {results['precision']:.4f}")
         print(f"  召回率 (Recall): {results['recall']:.4f}")
