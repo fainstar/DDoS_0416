@@ -24,25 +24,14 @@ class DDoSDetectionModel(nn.Module):
         mamba_config = MambaConfig(
             d_model=hidden_dim,
             d_state=16,
-            d_conv=4,
+            d_conv=8    ,
             expand_factor=2,
-            n_layers=1
+            n_layers=2
         )
         
         # 使用 config 對象來初始化 Mamba
-        try:
-            self.sequence_model = Mamba(config=mamba_config)
-            self.model_type = 'mamba'
-        except Exception as e:
-            print(f"Mamba 初始化失敗，錯誤: {e}，使用 LSTM 替代")
-            self.sequence_model = nn.LSTM(
-                input_size=hidden_dim,
-                hidden_size=hidden_dim,
-                num_layers=1,
-                batch_first=True
-            )
-            self.model_type = 'lstm'
-        
+        self.sequence_model = Mamba(config=mamba_config)
+        self.model_type = 'mamba'
         self.output_layer = nn.Linear(hidden_dim, output_dim)
         self.sigmoid = nn.Sigmoid()
         
@@ -61,12 +50,8 @@ class DDoSDetectionModel(nn.Module):
         x = self.input_projection(x)  # [batch_size, 1, hidden_dim]
         
         # 序列模型處理
-        if self.model_type == 'mamba':
-            x = self.sequence_model(x)  # [batch_size, 1, hidden_dim]
-        else:
-            # LSTM 返回 (output, (h_n, c_n))，我們只需要 output
-            x, _ = self.sequence_model(x)
-        
+        x = self.sequence_model(x)  # [batch_size, 1, hidden_dim]
+
         # 取最後序列位置的輸出
         x = x.squeeze(1)  # [batch_size, hidden_dim]
         
@@ -80,7 +65,7 @@ class DDoSDetectionModel(nn.Module):
 class CNNLSTMModel(nn.Module):
     """基於 CNN-LSTM 架構的 DDoS 攻擊檢測模型"""
     
-    def __init__(self, input_dim, hidden_dim=128, output_dim=1, seq_len=10):
+    def __init__(self, input_dim, hidden_dim=256, output_dim=1, seq_len=10):
         super(CNNLSTMModel, self).__init__()
         
         # 特徵轉換層 - 將輸入特徵轉換為適合 CNN 處理的格式
@@ -101,7 +86,7 @@ class CNNLSTMModel(nn.Module):
         
         # LSTM 層
         self.lstm = nn.LSTM(
-            input_size=64,
+            input_size=128,
             hidden_size=hidden_dim,
             num_layers=3,
             batch_first=True,
@@ -136,6 +121,9 @@ class CNNLSTMModel(nn.Module):
         x = F.relu(self.conv1(x))  # [batch_size, 32, seq_len]
         x = self.pool(x)  # [batch_size, 32, seq_len/2]
         x = F.relu(self.conv2(x))  # [batch_size, 64, seq_len/2]
+        x = self.pool(x)  # [batch_size, 64, seq_len/4]
+        x = F.relu(self.conv3(x))  # [batch_size, 128, seq_len/4]
+        x = self.pool(x)  # [batch_size, 128, seq_len/8]
         x = self.dropout1(x)
         
         # 重塑以適應LSTM層 [batch_size, channels, seq_len] -> [batch_size, seq_len, channels]

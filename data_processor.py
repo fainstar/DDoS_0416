@@ -243,10 +243,23 @@ def preprocess_data(data):
 
 
 def prepare_data_loaders(X, y, batch_size=128, test_size=0.3, val_size=0.5, random_state=42):
-    """準備數據加載器"""
-    # 分割訓練、驗證和測試集
-    X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=test_size, random_state=random_state)
-    X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=val_size, random_state=random_state)
+    """準備數據加載器 - 使用順序切割"""
+    total_samples = len(X)
+    
+    # 計算各部分的樣本數
+    test_samples = int(total_samples * test_size)
+    temp_samples = total_samples - test_samples
+    val_samples = int(test_samples * val_size)
+    
+    # 順序切割數據
+    X_train = X[:temp_samples]
+    y_train = y[:temp_samples]
+    
+    X_val = X[temp_samples:temp_samples+val_samples]
+    y_val = y[temp_samples:temp_samples+val_samples]
+    
+    X_test = X[temp_samples+val_samples:]
+    y_test = y[temp_samples+val_samples:]
     
     print(f"訓練集大小: {X_train.shape}, 驗證集大小: {X_val.shape}, 測試集大小: {X_test.shape}")
     
@@ -255,8 +268,8 @@ def prepare_data_loaders(X, y, batch_size=128, test_size=0.3, val_size=0.5, rand
     val_dataset = NetworkTrafficDataset(X_val, y_val)
     test_dataset = NetworkTrafficDataset(X_test, y_test)
     
-    # 使用較大的批次大小來加快訓練速度
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    # 注意：訓練集不再進行隨機打亂
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
     val_loader = DataLoader(val_dataset, batch_size=batch_size)
     test_loader = DataLoader(test_dataset, batch_size=batch_size)
     
