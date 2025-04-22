@@ -8,7 +8,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mambapy.mamba import Mamba, MambaConfig
 
 
 def count_parameters(model):
@@ -24,27 +23,30 @@ def count_parameters(model):
     return total_params, trainable_params
 
 
-class DDoSDetectionModel(nn.Module):
-    """基於 Mamba 的 DDoS 攻擊檢測模型"""
+class TransformerModel(nn.Module):
+    """基於 Transformer 的 DDoS 攻擊檢測模型"""
     
-    def __init__(self, input_dim, hidden_dim=256, output_dim=1):
-        super(DDoSDetectionModel, self).__init__()
+    def __init__(self, input_dim, hidden_dim=256, output_dim=1, nhead=8, num_layers=4, dropout=0.2):
+        super(TransformerModel, self).__init__()
         
         # 模型結構
         self.input_projection = nn.Linear(input_dim, hidden_dim)
         
-        # 使用 MambaConfig 來配置 Mamba 模型
-        mamba_config = MambaConfig(
+        # Transformer 編碼器層
+        encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden_dim,
-            d_state=32,  # 增加狀態空間維度
-            d_conv=16,   # 增加卷積維度
-            expand_factor=4,
-            n_layers=4   # 增加層數
+            nhead=nhead,
+            dim_feedforward=hidden_dim * 4,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True
         )
         
-        # 使用 config 對象來初始化 Mamba
-        self.sequence_model = Mamba(config=mamba_config)
-        self.model_type = 'mamba'
+        # Transformer 編碼器
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.model_type = 'transformer'
+        
+        # 輸出層
         self.output_layer = nn.Linear(hidden_dim, output_dim)
         self.sigmoid = nn.Sigmoid()
         
@@ -62,8 +64,8 @@ class DDoSDetectionModel(nn.Module):
         # 特徵投影到 hidden_dim
         x = self.input_projection(x)  # [batch_size, 1, hidden_dim]
         
-        # 序列模型處理
-        x = self.sequence_model(x)  # [batch_size, 1, hidden_dim]
+        # Transformer 編碼器處理
+        x = self.transformer_encoder(x)  # [batch_size, 1, hidden_dim]
 
         # 取最後序列位置的輸出
         x = x.squeeze(1)  # [batch_size, hidden_dim]
@@ -80,6 +82,9 @@ class CNNLSTMModel(nn.Module):
     
     def __init__(self, input_dim, hidden_dim=256, output_dim=1, seq_len=10):
         super(CNNLSTMModel, self).__init__()
+        
+        # 設置模型類型標識
+        self.model_type = 'cnnlstm'
         
         # 特徵轉換層 - 將輸入特徵轉換為適合 CNN 處理的格式
         self.seq_len = seq_len
@@ -191,16 +196,16 @@ class DeepNeuralNetDDoSModel(nn.Module):
 
 def create_model(model_type, input_dim):
     """根據指定的模型類型創建模型實例"""
-    if model_type == 'mamba':
+    if model_type == 'transformer' or model_type == 'mamba':  # 支持兩種名稱，向後兼容
         try:
-            model = DDoSDetectionModel(input_dim=input_dim)
+            model = TransformerModel(input_dim=input_dim)
             total_params, trainable_params = count_parameters(model)
-            print(f"\n{model_type.upper()} 模型參數統計：")
+            print(f"\nTransformer 模型參數統計：")
             print(f"總參數量: {total_params:,}")
             print(f"可訓練參數量: {trainable_params:,}")
             return model
         except Exception as e:
-            print(f"無法創建 Mamba 模型: {str(e)}，使用 DNN 替代")
+            print(f"無法創建 Transformer 模型: {str(e)}，使用 DNN 替代")
             model = DeepNeuralNetDDoSModel(input_dim=input_dim)
             total_params, trainable_params = count_parameters(model)
             print(f"\nDNN 模型參數統計：")

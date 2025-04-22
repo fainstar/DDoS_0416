@@ -28,7 +28,7 @@ prop = font_manager.FontProperties(fname=font_path)
 rc('font', family=prop.get_name())
 
 
-def load_trained_model(model_path, model_type='mamba', input_dim=78):
+def load_trained_model(model_path, model_type='transformer', input_dim=78):
     """載入訓練好的模型"""
     try:
         # 檢查模型文件是否存在
@@ -78,7 +78,7 @@ def predict_sample(model, sample_data, device='cpu'):
     return {"prediction": int(prediction), "probability": float(probability)}
 
 
-def test_model_on_file(model_path, test_file_path, model_type='mamba', sample_size=None, output_file=None):
+def test_model_on_file(model_path, test_file_path, model_type='transformer', sample_size=None, output_file=None):
     """在測試文件上測試模型"""
     print(f"在 {test_file_path} 上測試模型...")
     

@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager, rc
 import gc
 import torch
+from tqdm import tqdm
 
 # 設定中文字型
 font_path = "TFT/MSGOTHIC.TTF"
@@ -48,130 +49,149 @@ def clear_memory():
     else:
         print("記憶體清理完成：無可釋放空間")
 
+def get_gpu_memory_usage():
+    """獲取 GPU 記憶體使用情況"""
+    if torch.cuda.is_available():
+        return {
+            'allocated': torch.cuda.memory_allocated() / 1024 / 1024,  # MB
+            'reserved': torch.cuda.memory_reserved() / 1024 / 1024     # MB
+        }
+    return None
+
 def train_model(model, train_loader, val_loader, criterion=None, optimizer=None, 
                epochs=10, device='cuda', model_save_path=None):
     """訓練 DDoS 檢測模型"""
+    import csv
+    import os
     
-    print("開始清理記憶體...")
-    clear_memory()
-    initial_memory = get_memory_usage()
-    print(f"初始記憶體使用量: {initial_memory:.2f} MB")
-    
-    # 如果未提供損失函數和優化器，則創建默認值
     if criterion is None:
         criterion = nn.BCELoss()
     
     if optimizer is None:
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        optimizer = optim.Adam(model.parameters())
     
-    # 檢查 GPU 可用性
-    if device == 'cuda' and torch.cuda.is_available():
-        device = torch.device('cuda')
-        print("使用 GPU 訓練")
-    else:
-        device = torch.device('cpu')
-        print("使用 CPU 訓練")
-    
-    model.to(device)
-    
-    # 跟蹤訓練過程
+    model = model.to(device)
     train_losses = []
     val_losses = []
     val_accuracies = []
     memory_usage = []
-    best_val_accuracy = 0.0
-    
-    # 記錄開始時間
     start_time = time.time()
     
+    # 確保 logs 目錄存在
+    logs_dir = 'logs'
+    if not os.path.exists(logs_dir):
+        os.makedirs(logs_dir)
+    
+    # 創建 CSV 文件保存訓練記錄
+    model_type = getattr(model, 'model_type', 'unknown')
+    csv_filename = os.path.join(logs_dir, f'{model_type}_training_log.csv')
+    
+    with open(csv_filename, 'w', newline='') as csvfile:
+        csv_writer = csv.writer(csvfile)
+        # 寫入 CSV 頭部
+        csv_writer.writerow(['epoch', 'train_loss', 'val_loss', 'val_accuracy', 
+                             'time_seconds', 'memory_allocated_mb', 'memory_reserved_mb'])
+    
+    print(f"初始 GPU 記憶體使用: {get_gpu_memory_usage()['allocated']:.2f} MB")
+    
     for epoch in range(epochs):
-        # 訓練階段
         model.train()
-        train_loss = 0.0
+        epoch_loss = 0
         epoch_start_time = time.time()
         
-        for batch_idx, (inputs, labels) in enumerate(train_loader):
-            inputs, labels = inputs.to(device), labels.to(device)
+        for batch_idx, (data, target) in enumerate(train_loader):
+            data, target = data.to(device), target.to(device)
+            target = target.view(-1, 1)  # 調整目標張量維度為 [batch_size, 1]
             
-            # 清除梯度
             optimizer.zero_grad()
-            
-            # 前向傳播
-            outputs = model(inputs)
-            
-            # 計算損失
-            loss = criterion(outputs.squeeze(), labels)
-            
-            # 反向傳播
+            output = model(data)
+            loss = criterion(output, target)
             loss.backward()
-            
-            # 更新權重
             optimizer.step()
+            epoch_loss += loss.item()
             
-            train_loss += loss.item() * inputs.size(0)
-            
-            # 記錄記憶體使用
-            current_memory = get_memory_usage()
-            memory_usage.append({
-                'epoch': epoch + 1,
-                'batch': batch_idx,
-                'stage': 'training',
-                'memory_mb': current_memory,
-                'time': time.time() - start_time
-            })
+            if batch_idx % 100 == 0:
+                gpu_mem = get_gpu_memory_usage()
+                memory_usage.append({
+                    'time': time.time() - start_time,
+                    'memory_allocated': gpu_mem['allocated'],
+                    'memory_reserved': gpu_mem['reserved'],
+                    'epoch': epoch,
+                    'batch': batch_idx,
+                    'stage': 'training'
+                })
         
-        # 計算平均訓練損失
-        train_loss = train_loss / len(train_loader.dataset)
-        train_losses.append(train_loss)
+        avg_train_loss = epoch_loss / len(train_loader)
+        train_losses.append(avg_train_loss)
         
         # 驗證階段
-        val_loss, val_accuracy = evaluate_model(model, val_loader, criterion, device, return_metrics=True)
-        val_losses.append(val_loss)
-        val_accuracies.append(val_accuracy)
+        model.eval()
+        val_loss = 0
+        correct = 0
+        total = 0
         
-        # 記錄驗證階段的記憶體使用
+        with torch.no_grad():
+            for data, target in val_loader:
+                data, target = data.to(device), target.to(device)
+                target = target.view(-1, 1)  # 調整目標張量維度為 [batch_size, 1]
+                output = model(data)
+                val_loss += criterion(output, target).item()
+                predicted = (output > 0.5).float()
+                total += target.size(0)
+                correct += (predicted == target).sum().item()
+        
+        avg_val_loss = val_loss / len(val_loader)
+        val_losses.append(avg_val_loss)
+        accuracy = correct / total
+        val_accuracies.append(accuracy)
+        
+        gpu_mem = get_gpu_memory_usage()
         memory_usage.append({
-            'epoch': epoch + 1,
-            'stage': 'validation',
-            'memory_mb': get_memory_usage(),
-            'time': time.time() - start_time
+            'time': time.time() - start_time,
+            'memory_allocated': gpu_mem['allocated'],
+            'memory_reserved': gpu_mem['reserved'],
+            'epoch': epoch,
+            'stage': 'validation'
         })
         
-        # 如果達到更好的驗證準確率，保存模型
-        if model_save_path and val_accuracy > best_val_accuracy:
-            best_val_accuracy = val_accuracy
-            print(f"發現更好的模型，保存到 {model_save_path}")
-            torch.save(model.state_dict(), model_save_path)
-        
-        # 計算每個 epoch 的執行時間
         epoch_time = time.time() - epoch_start_time
         
-        # 打印當前 epoch 的訓練狀態
-        print(f"Epoch {epoch+1}/{epochs} - "
-              f"訓練損失: {train_loss:.4f} - "
-              f"驗證損失: {val_loss:.4f} - "
-              f"驗證準確率: {val_accuracy:.4f} - "
-              f"執行時間: {epoch_time:.2f}秒 - "
-              f"記憶體使用: {get_memory_usage():.2f}MB")
+        # 保存這個 epoch 的訓練記錄到 CSV
+        with open(csv_filename, 'a', newline='') as csvfile:
+            csv_writer = csv.writer(csvfile)
+            csv_writer.writerow([
+                epoch + 1,
+                avg_train_loss,
+                avg_val_loss,
+                accuracy,
+                epoch_time,
+                gpu_mem["allocated"],
+                gpu_mem["reserved"]
+            ])
+        
+        print(f'Epoch {epoch+1}/{epochs} - 訓練損失: {avg_train_loss:.4f} - 驗證損失: {avg_val_loss:.4f} - '
+              f'驗證準確率: {accuracy:.4f} - 執行時間: {epoch_time:.2f}秒 - '
+              f'記憶體使用: {gpu_mem["allocated"]:.2f}MB')
+        
+        clear_memory()
     
-    # 繪製訓練過程圖表
-    plot_training_history(train_losses, val_losses, val_accuracies, memory_usage)
-    
-    # 如果沒有在訓練過程中保存最佳模型，則保存最終模型
-    if model_save_path and val_accuracies[-1] > best_val_accuracy:
+    if model_save_path:
         torch.save(model.state_dict(), model_save_path)
-        print(f"最終模型已保存到 {model_save_path}")
+        print(f"模型已保存至 '{model_save_path}'")
+        print(f"訓練記錄已保存至 '{csv_filename}'")
     
     return model, {
-        'train_losses': train_losses, 
-        'val_losses': val_losses, 
-        'val_accuracies': val_accuracies,
+        'train_loss': train_losses,
+        'val_loss': val_losses,
+        'val_acc': val_accuracies,
         'memory_usage': memory_usage
     }
 
 
 def evaluate_model(model, data_loader, criterion=None, device='cuda', return_metrics=False):
     """評估模型性能"""
+    import csv
+    import os
     
     if criterion is None:
         criterion = nn.BCELoss()
@@ -189,10 +209,23 @@ def evaluate_model(model, data_loader, criterion=None, device='cuda', return_met
     val_loss = 0.0
     val_correct = 0
     
+    # 確保 logs 目錄存在
+    logs_dir = 'logs'
+    if not os.path.exists(logs_dir):
+        os.makedirs(logs_dir)
+    
+    # 獲取模型類型
+    model_type = getattr(model, 'model_type', 'unknown')
+    
+    # 記錄評估開始時間
+    start_time = time.time()
     start_memory = get_memory_usage()
     
+    # 逐批次評估
+    batch_metrics = []
+    
     with torch.no_grad():
-        for inputs, labels in data_loader:
+        for batch_idx, (inputs, labels) in enumerate(data_loader):
             inputs, labels = inputs.to(device), labels.to(device)
             
             # 前向傳播
@@ -204,10 +237,29 @@ def evaluate_model(model, data_loader, criterion=None, device='cuda', return_met
             
             # 計算準確率
             predicted = (outputs.squeeze() > 0.5).float()
-            val_correct += (predicted == labels).sum().item()
+            batch_correct = (predicted == labels).sum().item()
+            val_correct += batch_correct
             
             all_preds.extend(predicted.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
+            
+            # 記錄每個批次的指標
+            batch_accuracy = batch_correct / len(labels)
+            batch_time = time.time() - start_time
+            gpu_mem = get_gpu_memory_usage() if torch.cuda.is_available() else {"allocated": 0, "reserved": 0}
+            
+            batch_metrics.append({
+                'batch': batch_idx,
+                'loss': loss.item(),
+                'accuracy': batch_accuracy,
+                'time': batch_time,
+                'memory_allocated': gpu_mem['allocated'] if gpu_mem else 0,
+                'memory_reserved': gpu_mem['reserved'] if gpu_mem else 0
+            })
+    
+    # 計算評估總時間
+    end_time = time.time()
+    evaluation_time = end_time - start_time
     
     end_memory = get_memory_usage()
     memory_change = end_memory - start_memory
@@ -249,6 +301,39 @@ def evaluate_model(model, data_loader, criterion=None, device='cuda', return_met
     print(f"F1 分數: {f1:.4f}")
     print(f"誤報率 (FPR): {fpr:.4f}")
     
+    # 保存評估結果到 CSV
+    csv_filename = os.path.join(logs_dir, f'{model_type}_evaluation_result.csv')
+    with open(csv_filename, 'w', newline='') as csvfile:
+        csv_writer = csv.writer(csvfile)
+        csv_writer.writerow([
+            'accuracy', 'precision', 'recall', 'f1', 'fpr',
+            'evaluation_time', 'memory_change', 'tn', 'fp', 'fn', 'tp'
+        ])
+        csv_writer.writerow([
+            accuracy, precision, recall, f1, fpr,
+            evaluation_time, memory_change, tn, fp, fn, tp
+        ])
+    
+    # 保存批次級別的評估指標
+    batch_csv_filename = os.path.join(logs_dir, f'{model_type}_batch_evaluation.csv')
+    with open(batch_csv_filename, 'w', newline='') as csvfile:
+        csv_writer = csv.writer(csvfile)
+        csv_writer.writerow([
+            'batch', 'loss', 'accuracy', 'time', 'memory_allocated', 'memory_reserved'
+        ])
+        for metric in batch_metrics:
+            csv_writer.writerow([
+                metric['batch'], 
+                metric['loss'], 
+                metric['accuracy'], 
+                metric['time'], 
+                metric['memory_allocated'],
+                metric['memory_reserved']
+            ])
+    
+    print(f"評估結果已保存至 '{csv_filename}'")
+    print(f"批次評估數據已保存至 '{batch_csv_filename}'")
+    
     # 返回詳細結果
     return {
         'accuracy': accuracy,
@@ -258,7 +343,8 @@ def evaluate_model(model, data_loader, criterion=None, device='cuda', return_met
         'fpr': fpr,
         'confusion_matrix': conf_matrix,
         'classification_report': report,
-        'memory_change': memory_change
+        'memory_change': memory_change,
+        'evaluation_time': evaluation_time
     }
 
 
@@ -296,34 +382,47 @@ def plot_training_history(train_losses, val_losses, val_accuracies, memory_usage
 
     # 3. 記憶體使用量（按階段）
     times = [m['time'] for m in memory_usage]
-    memory_mb = [m['memory_mb'] for m in memory_usage]
+    memory_allocated = [m['memory_allocated'] for m in memory_usage]
+    memory_reserved = [m['memory_reserved'] for m in memory_usage]
     stages = [m['stage'] for m in memory_usage]
 
     for stage in ['training', 'validation']:
         stage_indices = [i for i, s in enumerate(stages) if s == stage]
         if stage_indices:
             stage_times = [times[i] for i in stage_indices]
-            stage_memory = [memory_mb[i] for i in stage_indices]
-            label = '訓練階段' if stage == 'training' else '驗證階段'
-            ax3.plot(stage_times, stage_memory, label=label, alpha=0.7)
+            stage_allocated = [memory_allocated[i] for i in stage_indices]
+            stage_reserved = [memory_reserved[i] for i in stage_indices]
+            label_allocated = f'已分配記憶體 ({stage})'
+            label_reserved = f'保留記憶體 ({stage})'
+            ax3.plot(stage_times, stage_allocated, label=label_allocated, alpha=0.7)
+            ax3.plot(stage_times, stage_reserved, label=label_reserved, linestyle='--', alpha=0.5)
 
     ax3.set_xlabel('執行時間（秒）')
     ax3.set_ylabel('記憶體使用量（MB）')
-    ax3.set_title('記憶體使用變化')
+    ax3.set_title('GPU 記憶體使用變化')
     ax3.legend()
 
     # 4. 平均記憶體使用量（按epoch）
     epochs = sorted(list(set(m['epoch'] for m in memory_usage)))
-    avg_memory_by_epoch = []
+    avg_allocated_by_epoch = []
+    avg_reserved_by_epoch = []
 
     for epoch in epochs:
-        epoch_memory = [m['memory_mb'] for m in memory_usage if m['epoch'] == epoch]
-        avg_memory_by_epoch.append(np.mean(epoch_memory))
+        epoch_allocated = [m['memory_allocated'] for m in memory_usage if m['epoch'] == epoch]
+        epoch_reserved = [m['memory_reserved'] for m in memory_usage if m['epoch'] == epoch]
+        avg_allocated_by_epoch.append(np.mean(epoch_allocated))
+        avg_reserved_by_epoch.append(np.mean(epoch_reserved))
 
-    ax4.bar(epochs, avg_memory_by_epoch)
+    x = np.arange(len(epochs))
+    width = 0.35
+    ax4.bar(x - width/2, avg_allocated_by_epoch, width, label='已分配記憶體')
+    ax4.bar(x + width/2, avg_reserved_by_epoch, width, label='保留記憶體')
     ax4.set_xlabel('訓練週期')
     ax4.set_ylabel('平均記憶體使用量（MB）')
-    ax4.set_title('每個週期的平均記憶體使用量')
+    ax4.set_title('每個週期的平均 GPU 記憶體使用量')
+    ax4.set_xticks(x)
+    ax4.set_xticklabels([f'Epoch {e}' for e in epochs])
+    ax4.legend()
 
     plt.tight_layout()
     history_path = os.path.join(plots_dir, 'training_history.png')

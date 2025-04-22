@@ -38,8 +38,8 @@ def parse_args():
     parser.add_argument('--data', type=str, default='AllMerged.csv', help='數據文件路徑')
     parser.add_argument('--mode', type=str, default='train', 
                         choices=['train', 'test', 'predict', 'compare'], help='運行模式')
-    parser.add_argument('--model_type', type=str, default='mamba', 
-                        choices=['mamba', 'cnnlstm', 'dnn'], help='模型類型')
+    parser.add_argument('--model_type', type=str, default='transformer', 
+                        choices=['transformer', 'mamba', 'cnnlstm', 'dnn'], help='模型類型')
     parser.add_argument('--model_path', type=str, default='ddos_detection_model.pth', help='模型保存/載入路徑')
     
     # 訓練參數
@@ -76,11 +76,32 @@ def get_memory_usage():
     return process.memory_info().rss / 1024 / 1024  # 轉換為 MB
 
 
+def get_gpu_memory():
+    """獲取當前 GPU 記憶體使用情況"""
+    if torch.cuda.is_available():
+        gpu_memory_allocated = torch.cuda.memory_allocated() / 1024 / 1024  # 轉換為 MB
+        gpu_memory_reserved = torch.cuda.memory_reserved() / 1024 / 1024  # 轉換為 MB
+        return {
+            'allocated': gpu_memory_allocated,
+            'reserved': gpu_memory_reserved
+        }
+    return None
+
+
 def train_ddos_model(args):
     """訓練 DDoS 檢測模型"""
     print(f"\n{'='*50}")
-    print(f"DDoS 攻擊檢測系統 - 訓練 {args.model_type.upper()} 模型")
+    # 顯示 TRANSFORMER 而不是 MAMBA
+    model_display_name = "TRANSFORMER" if args.model_type.lower() == "mamba" else args.model_type.upper()
+    print(f"DDoS 攻擊檢測系統 - 訓練 {model_display_name} 模型")
     print(f"{'='*50}")
+    
+    # 記錄初始 GPU 記憶體
+    initial_gpu_memory = get_gpu_memory()
+    if initial_gpu_memory:
+        print(f"初始 GPU 記憶體使用：")
+        print(f"已分配：{initial_gpu_memory['allocated']:.2f} MB")
+        print(f"已預留：{initial_gpu_memory['reserved']:.2f} MB")
     
     # 載入數據
     data = load_network_data(args.data)
@@ -126,9 +147,16 @@ def train_ddos_model(args):
         model_save_path=args.model_path
     )
     
-    # 評估模型
+    # 評估模型性能和記錄最終 GPU 記憶體使用
     print("\n評估模型性能...")
     results = evaluate_model(model, test_loader, device=args.device)
+    
+    final_gpu_memory = get_gpu_memory()
+    if final_gpu_memory:
+        print(f"\nGPU 記憶體使用情況：")
+        print(f"已分配：{final_gpu_memory['allocated']:.2f} MB")
+        print(f"已預留：{final_gpu_memory['reserved']:.2f} MB")
+        print(f"訓練期間增加：{final_gpu_memory['allocated'] - initial_gpu_memory['allocated']:.2f} MB")
     
     print(f"\n訓練完成! 模型已保存至 '{args.model_path}'")
     
@@ -247,8 +275,8 @@ def compare_models(args):
     original_model_type = args.model_type
     original_model_path = args.model_path
 
-    model_types = ['mamba', 'cnnlstm']
-    model_paths = ['mamba_model.pth', 'cnnlstm_model.pth']
+    model_types = ['transformer', 'cnnlstm']  # 使用 transformer 替代原來的 mamba
+    model_paths = ['transformer_model.pth', 'cnnlstm_model.pth']
     model_results = {}
 
     # 依次訓練並評估每個模型
@@ -291,9 +319,66 @@ def compare_models(args):
     args.model_type = original_model_type
     args.model_path = original_model_path
 
-    # 生成比較圖表
-    from plots_generator import create_comparison_charts, create_performance_comparison_chart
+    # 從 CSV 文件生成訓練和評估圖表
+    from plots_generator import plot_from_training_csv, plot_from_evaluation_csv, create_comparison_charts_from_csv
+    
+    # 確保 logs 目錄存在
+    logs_dir = 'logs'
+    if os.path.exists(logs_dir):
+        # 檔名映射表，處理可能的模型類型名稱與實際檔案名稱不符的情況
+        file_name_mapping = {
+            'transformer': 'transformer',
+            'mamba': 'transformer',  # mamba 實際使用 transformer
+            'cnnlstm': 'cnnlstm'
+        }
+        
+        # 檢查已存在的檔案
+        existing_files = os.listdir(logs_dir)
+        
+        # 如果 cnnlstm 的檔案不存在，但 unknown 檔案存在，則使用 unknown
+        if not any(f.startswith('cnnlstm_') for f in existing_files) and any(f.startswith('unknown_') for f in existing_files):
+            file_name_mapping['cnnlstm'] = 'unknown'
+        
+        # 為每個模型生成單獨的訓練和評估圖表
+        for model_type in model_types:
+            file_prefix = file_name_mapping.get(model_type, model_type)
+            training_log = os.path.join(logs_dir, f'{file_prefix}_training_log.csv')
+            eval_result = os.path.join(logs_dir, f'{file_prefix}_evaluation_result.csv')
+            batch_eval = os.path.join(logs_dir, f'{file_prefix}_batch_evaluation.csv')
+            
+            if os.path.exists(training_log):
+                plot_from_training_csv(training_log, model_type)
+                print(f"已從 {training_log} 生成訓練圖表")
+            else:
+                print(f"找不到模型 {model_type} 的訓練記錄文件: {training_log}")
+            
+            if os.path.exists(eval_result):
+                if os.path.exists(batch_eval):
+                    plot_from_evaluation_csv(eval_result, batch_eval, model_type)
+                else:
+                    plot_from_evaluation_csv(eval_result, model_name=model_type)
+                print(f"已從 {eval_result} 生成評估圖表")
+            else:
+                print(f"找不到模型 {model_type} 的評估結果文件: {eval_result}")
+        
+        # 使用映射後的檔案名稱列表進行比較圖表生成
+        mapped_model_types = [file_name_mapping.get(mt, mt) for mt in model_types]
+        
+        # 檢查是否所有模型的評估結果文件都存在
+        all_models_exist = all(os.path.exists(os.path.join(logs_dir, f'{mt}_evaluation_result.csv')) for mt in mapped_model_types)
+        
+        if all_models_exist:
+            create_comparison_charts_from_csv(mapped_model_types)
+            print(f"已從 CSV 文件生成所有比較圖表")
+        else:
+            print(f"無法生成比較圖表，因為部分評估結果文件不存在")
+    else:
+        print(f"找不到日誌目錄: {logs_dir}")
+    
+    # 保留兼容舊版本的行為
+    from plots_generator import create_comparison_charts, create_confusion_matrices_chart, create_performance_comparison_chart
     create_comparison_charts(model_results)
+    create_confusion_matrices_chart(model_results)
     create_performance_comparison_chart(model_results)
 
     # 輸出比較結果摘要
