@@ -27,7 +27,7 @@ from data_processor import load_network_data, preprocess_data, prepare_data_load
 from models import create_model, count_parameters
 from trainer import train_model, evaluate_model
 from test import load_trained_model, real_time_prediction
-from plots_generator import create_comparison_charts
+from plots_generator import create_comparison_charts, plot_feature_importance, plot_multiple_model_feature_importance, plot_feature_correlation
 
 
 def parse_args():
@@ -37,9 +37,9 @@ def parse_args():
     # 基本參數
     parser.add_argument('--data', type=str, default='AllMerged.csv', help='數據文件路徑')
     parser.add_argument('--mode', type=str, default='train', 
-                        choices=['train', 'test', 'predict', 'compare'], help='運行模式')
+                        choices=['train', 'test', 'predict', 'compare', 'feature_importance'], help='運行模式')
     parser.add_argument('--model_type', type=str, default='transformer', 
-                        choices=['transformer', 'mamba', 'cnnlstm', 'dnn'], help='模型類型')
+                        choices=['transformer', 'mamba', 'cnnlstm', 'dnn', 'compare', 'random_forest', 'permutation'], help='模型類型')
     parser.add_argument('--model_path', type=str, default='ddos_detection_model.pth', help='模型保存/載入路徑')
     
     # 訓練參數
@@ -47,6 +47,11 @@ def parse_args():
     parser.add_argument('--epochs', type=int, default=5, help='訓練輪數')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='學習率')
     parser.add_argument('--max_samples', type=int, default=500000, help='最大樣本數量 (0 表示使用所有數據)')
+    
+    # 特徵重要性參數
+    parser.add_argument('--n_features', type=int, default=15, help='顯示的特徵數量')
+    parser.add_argument('--importance_method', type=str, default='random_forest', 
+                       choices=['random_forest', 'permutation'], help='特徵重要性計算方法')
     
     # 其他參數
     parser.add_argument('--device', type=str, default='auto', choices=['auto', 'cpu', 'cuda'], help='訓練設備')
@@ -406,15 +411,108 @@ def ensure_plots_dir():
     return plots_dir
 
 
+def generate_feature_importance(args):
+    """生成特徵重要性圖表"""
+    print(f"\n{'='*50}")
+    print("DDoS 攻擊檢測系統 - 特徵重要性分析")
+    print(f"{'='*50}")
+    
+    # 載入數據
+    print("加載數據...")
+    data = load_network_data(args.data)
+    
+    # 數據預處理
+    print("預處理數據...")
+    X, y = preprocess_data(data)
+    
+    # 獲取特徵名稱列表
+    if isinstance(data, pd.DataFrame):
+        # 假設最後一列是標籤列，之前的列都是特徵列
+        feature_names = data.columns[:-1].tolist()
+    else:
+        # 如果沒有列名，就生成默認列名
+        feature_names = [f'特徵 {i+1}' for i in range(X.shape[1])]
+    
+    # 如果指定了最大樣本數，進行采樣
+    if args.max_samples > 0 and len(X) > args.max_samples:
+        print(f"為了提高效率，隨機抽樣 {args.max_samples} 條數據...")
+        indices = np.random.choice(len(X), args.max_samples, replace=False)
+        X = X[indices]
+        y = y[indices]
+    
+    # 根據指定的模型生成特徵重要性
+    if args.model_type.lower() == 'compare':
+        print("為多個模型生成特徵重要性比較...")
+        plot_multiple_model_feature_importance(
+            X, y, feature_names, 
+            model_names=['transformer', 'cnnlstm'], 
+            n_features=args.n_features
+        )
+    else:
+        print(f"為 {args.model_type} 模型生成特徵重要性...")
+        importance_df = plot_feature_importance(
+            X, y, feature_names, 
+            model_name=args.model_type,
+            n_features=args.n_features,
+            method=args.importance_method
+        )
+        
+        # 打印特徵重要性排名
+        print("\n特徵重要性排名:")
+        for i, (feature, importance) in enumerate(zip(importance_df['特徵'].head(args.n_features), 
+                                                    importance_df['重要性'].head(args.n_features))):
+            print(f"{i+1}. {feature}: {importance:.4f}")
+    
+    print("\n特徵重要性分析完成！圖表已保存至 plots 目錄")
+
+
+def analyze_feature_importance(args):
+    """分析特徵重要性"""
+    print(f"\n{'='*50}")
+    print(f"DDoS 攻擊檢測系統 - 特徵重要性分析")
+    print(f"{'='*50}")
+    
+    start_time = time.time()
+    initial_memory = get_memory_usage()
+    
+    print(f"數據文件: {args.data}")
+    print(f"特徵重要性計算方法: {args.importance_method}")
+    print(f"顯示特徵數量: {args.n_features}")
+    print(f"開始分析特徵重要性...")
+    
+    # 生成特徵重要性圖表
+    importance_file = plot_feature_importance(
+        data_path=args.data,
+        top_n=args.n_features,
+        model_type=args.importance_method
+    )
+    
+    # 生成特徵相關性熱力圖
+    correlation_file = plot_feature_correlation(
+        data_path=args.data,
+        top_n=args.n_features
+    )
+    
+    # 計算執行時間和記憶體使用
+    execution_time = time.time() - start_time
+    final_memory = get_memory_usage()
+    memory_used = final_memory - initial_memory
+    
+    print(f"\n{'='*50}")
+    print(f"特徵重要性分析完成！")
+    print(f"執行時間: {execution_time:.2f} 秒")
+    print(f"記憶體使用: {memory_used:.2f} MB")
+    print(f"特徵重要性圖表已保存至: {importance_file}")
+    print(f"特徵相關性熱力圖已保存至: {correlation_file}")
+    print(f"{'='*50}\n")
+
+
 def main():
     """主函數"""
-    # 使用命令行參數
     args = parse_args()
-    
-    # 設置隨機種子
     set_seed(args.seed)
     
-    # 根據指定模式執行相應功能
+    # 根據運行模式選擇操作
     if args.mode == 'train':
         train_ddos_model(args)
     elif args.mode == 'test':
@@ -423,8 +521,11 @@ def main():
         predict_flow(args)
     elif args.mode == 'compare':
         compare_models(args)
+    elif args.mode == 'feature_importance':
+        analyze_feature_importance(args)
     else:
-        print(f"不支持的模式: {args.mode}")
+        print(f"錯誤：未知的運行模式 '{args.mode}'")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

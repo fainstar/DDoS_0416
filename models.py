@@ -78,7 +78,18 @@ class TransformerModel(nn.Module):
 
 
 class CNNLSTMModel(nn.Module):
-    """基於 CNN-LSTM 架構的 DDoS 攻擊檢測模型"""
+    """基於 CNN-LSTM 混合架構的 DDoS 攻擊檢測模型
+    
+    此模型結合了卷積神經網絡 (CNN) 和雙向長短期記憶網絡 (BiLSTM)，
+    能夠有效捕捉網絡流量特徵中的時空模式。CNN 用於提取局部特徵，
+    BiLSTM 用於捕捉長期依賴關係。
+    
+    架構流程:
+    1. 將輸入特徵轉換為序列形式
+    2. 通過多層卷積提取局部特徵
+    3. 使用雙向LSTM捕捉序列中的時間依賴關係
+    4. 全連接層進行最終分類
+    """
     
     def __init__(self, input_dim, hidden_dim=256, output_dim=1, seq_len=10):
         super(CNNLSTMModel, self).__init__()
@@ -91,28 +102,28 @@ class CNNLSTMModel(nn.Module):
         self.feature_transform = nn.Linear(input_dim, seq_len)
         self.batch_norm = nn.BatchNorm1d(seq_len)
         
-        # CNN 層
+        # CNN 層 - 提取局部特徵
         self.conv1 = nn.Conv1d(in_channels=1, out_channels=32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv1d(in_channels=32, out_channels=64, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv1d(64, 128, kernel_size=3, padding=1)  # 新增
+        self.conv3 = nn.Conv1d(64, 128, kernel_size=3, padding=1)
         self.residual = nn.Conv1d(32, 64, kernel_size=1)  # shortcut 讓維度對齊
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
         self.dropout1 = nn.Dropout(0.4)
         
         # 計算卷積後的序列長度
-        cnn_out_len = seq_len // 2  # 經過池化層後長度減半
+        cnn_out_len = seq_len // 8  # 經過三次池化層後長度變為原始的 1/8
         
-        # LSTM 層
+        # LSTM 層 - 捕捉時間依賴關係
         self.lstm = nn.LSTM(
             input_size=128,
             hidden_size=hidden_dim,
             num_layers=3,
             batch_first=True,
             dropout=0.4,
-            bidirectional=True
+            bidirectional=True  # 雙向LSTM可以同時考慮前後文信息
         )
         
-        # 全連接層
+        # 全連接層 - 最終分類
         self.fc = nn.Linear(hidden_dim * 2, hidden_dim)  # *2 因為是雙向LSTM
         self.dropout2 = nn.Dropout(0.3)
         self.output_layer = nn.Linear(hidden_dim, output_dim)
@@ -128,33 +139,33 @@ class CNNLSTMModel(nn.Module):
         if next(self.parameters()).device != device:
             self.to(device)
         
-        # 首先將特徵轉換為CNN能處理的序列形式
+        # 特徵轉換 - 將輸入轉換為序列形式
         x = self.feature_transform(x)  # [batch_size, seq_len]
         x = self.batch_norm(x)
         
-        # 添加通道維度
+        # 添加通道維度用於CNN處理
         x = x.unsqueeze(1)  # [batch_size, 1, seq_len]
         
-        # CNN層
-        x = F.relu(self.conv1(x))  # [batch_size, 32, seq_len]
+        # CNN特徵提取 - 三層卷積堆疊
+        x = F.leaky_relu(self.conv1(x), negative_slope=0.1)  # 使用LeakyReLU以避免死神經元
         x = self.pool(x)  # [batch_size, 32, seq_len/2]
-        x = F.relu(self.conv2(x))  # [batch_size, 64, seq_len/2]
+        x = F.leaky_relu(self.conv2(x), negative_slope=0.1)
         x = self.pool(x)  # [batch_size, 64, seq_len/4]
-        x = F.relu(self.conv3(x))  # [batch_size, 128, seq_len/4]
+        x = F.leaky_relu(self.conv3(x), negative_slope=0.1)
         x = self.pool(x)  # [batch_size, 128, seq_len/8]
         x = self.dropout1(x)
         
         # 重塑以適應LSTM層 [batch_size, channels, seq_len] -> [batch_size, seq_len, channels]
-        x = x.transpose(1, 2)  # [batch_size, seq_len/2, 64]
+        x = x.transpose(1, 2)  # [batch_size, seq_len/8, 128]
         
-        # LSTM層
-        x, _ = self.lstm(x)  # [batch_size, seq_len/2, hidden_dim*2]
+        # BiLSTM處理 - 捕捉時間依賴關係
+        x, _ = self.lstm(x)  # [batch_size, seq_len/8, hidden_dim*2]
         
-        # 取最後一個時間步的輸出
+        # 取最後一個時間步的輸出 - 包含整個序列的信息
         x = x[:, -1, :]  # [batch_size, hidden_dim*2]
         
-        # 全連接層
-        x = F.relu(self.fc(x))
+        # 分類部分
+        x = F.leaky_relu(self.fc(x), negative_slope=0.1)
         x = self.dropout2(x)
         x = self.output_layer(x)
         x = self.sigmoid(x)

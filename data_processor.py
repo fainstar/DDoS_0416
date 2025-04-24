@@ -243,7 +243,21 @@ def preprocess_data(data):
 
 
 def prepare_data_loaders(X, y, batch_size=128, test_size=0.3, val_size=0.5, random_state=42):
-    """準備數據加載器 - 使用順序切割"""
+    """準備數據加載器 - 使用順序切割
+    
+    將數據按照時間順序分成訓練集、驗證集和測試集，以便模擬真實環境中的模型評估情境。
+    
+    Args:
+        X (numpy.ndarray): 預處理後的特徵矩陣
+        y (numpy.ndarray): 二分類標籤向量
+        batch_size (int): 批次大小
+        test_size (float): 測試集佔總數據的比例
+        val_size (float): 驗證集佔測試數據的比例
+        random_state (int): 隨機種子
+        
+    Returns:
+        tuple: (訓練數據加載器, 驗證數據加載器, 測試數據加載器)
+    """
     total_samples = len(X)
     
     # 計算各部分的樣本數
@@ -251,7 +265,7 @@ def prepare_data_loaders(X, y, batch_size=128, test_size=0.3, val_size=0.5, rand
     temp_samples = total_samples - test_samples
     val_samples = int(test_samples * val_size)
     
-    # 順序切割數據
+    # 順序切割數據 - 訓練集使用較早的數據，測試集使用較新的數據
     X_train = X[:temp_samples]
     y_train = y[:temp_samples]
     
@@ -268,7 +282,7 @@ def prepare_data_loaders(X, y, batch_size=128, test_size=0.3, val_size=0.5, rand
     val_dataset = NetworkTrafficDataset(X_val, y_val)
     test_dataset = NetworkTrafficDataset(X_test, y_test)
     
-    # 注意：訓練集不再進行隨機打亂
+    # 注意：訓練集不再進行隨機打亂，保持時間順序
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
     val_loader = DataLoader(val_dataset, batch_size=batch_size)
     test_loader = DataLoader(test_dataset, batch_size=batch_size)

@@ -21,6 +21,7 @@ import time
 from data_processor import preprocess_data, NetworkTrafficDataset
 from models import create_model
 from trainer import evaluate_model
+from plots_generator import plot_roc_curve, generate_roc_comparison_from_logs  # 新增導入
 
 # 設定中文字型
 font_path = "TFT/MSGOTHIC.TTF"
@@ -78,7 +79,7 @@ def predict_sample(model, sample_data, device='cpu'):
     return {"prediction": int(prediction), "probability": float(probability)}
 
 
-def test_model_on_file(model_path, test_file_path, model_type='transformer', sample_size=None, output_file=None):
+def test_model_on_file(model_path, test_file_path, model_type='transformer', sample_size=None, output_file=None, save_predictions=True):
     """在測試文件上測試模型"""
     print(f"在 {test_file_path} 上測試模型...")
     
@@ -109,7 +110,7 @@ def test_model_on_file(model_path, test_file_path, model_type='transformer', sam
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=128)
         
         # 評估模型
-        results = evaluate_model(model, test_loader)
+        results, all_preds, all_labels, all_probs = evaluate_model(model, test_loader, return_predictions=True)
         
         # 存儲結果（如果指定了輸出文件）
         if output_file:
@@ -122,6 +123,32 @@ def test_model_on_file(model_path, test_file_path, model_type='transformer', sam
                     'fpr': float(results['fpr'])
                 }, f, indent=4)
                 print(f"測試結果已保存至 {output_file}")
+        
+        # 保存預測結果，用於繪製ROC曲線
+        if save_predictions:
+            logs_dir = 'logs'
+            if not os.path.exists(logs_dir):
+                os.makedirs(logs_dir)
+                
+            # 提取模型名稱
+            model_name = model_type
+            if '/' in model_path:
+                model_name = os.path.basename(model_path).replace('.pth', '')
+                
+            # 保存預測結果
+            predictions_df = pd.DataFrame({
+                'true_label': all_labels,
+                'predicted_label': all_preds,
+                'pred_probability': all_probs
+            })
+            
+            pred_file = os.path.join(logs_dir, f'{model_name}_predictions.csv')
+            predictions_df.to_csv(pred_file, index=False)
+            print(f"預測結果已保存至 {pred_file}")
+            
+            # 繪製ROC曲線
+            roc_path, _ = plot_roc_curve(all_labels, all_probs, model_name)
+            print(f"ROC曲線圖已保存至 {roc_path}")
         
         return results
     
@@ -235,12 +262,38 @@ def get_memory_usage():
     return process.memory_info().rss / 1024 / 1024  # 轉換為 MB
 
 
+def compare_models_roc(model_names=None):
+    """
+    比較不同模型的ROC曲線
+    
+    Args:
+        model_names: 模型名稱列表，如果為None則自動尋找所有可用模型
+        
+    Returns:
+        比較圖的保存路徑
+    """
+    print("正在生成模型ROC曲線比較圖...")
+    try:
+        return generate_roc_comparison_from_logs(model_names)
+    except Exception as e:
+        print(f"生成ROC曲線比較圖時出錯: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 if __name__ == "__main__":
     # 執行獨立測試
     model_path = "ddos_detection_model.pth"
     
     if len(sys.argv) > 1:
-        test_file = sys.argv[1]
-        results = test_model_on_file(model_path, test_file, output_file="test_results.json")
+        if sys.argv[1] == "--compare-roc":
+            # 比較模型ROC曲線
+            model_names = sys.argv[2:] if len(sys.argv) > 2 else None
+            compare_models_roc(model_names)
+        else:
+            # 正常測試流程
+            test_file = sys.argv[1]
+            results = test_model_on_file(model_path, test_file, output_file="test_results.json")
     else:
-        print("使用方法: python test.py <test_data_file.csv>")
+        print("使用方法: python test.py <test_data_file.csv> 或 python test.py --compare-roc [model_name1 model_name2 ...]")

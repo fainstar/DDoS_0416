@@ -174,6 +174,8 @@ def train_model(model, train_loader, val_loader, criterion=None, optimizer=None,
               f'記憶體使用: {gpu_mem["allocated"]:.2f}MB')
         
         clear_memory()
+        
+        # 移除詢問用戶是否繼續訓練的代碼
     
     if model_save_path:
         torch.save(model.state_dict(), model_save_path)
@@ -188,7 +190,7 @@ def train_model(model, train_loader, val_loader, criterion=None, optimizer=None,
     }
 
 
-def evaluate_model(model, data_loader, criterion=None, device='cuda', return_metrics=False):
+def evaluate_model(model, data_loader, criterion=None, device='cuda', return_metrics=False, return_predictions=False):
     """評估模型性能"""
     import csv
     import os
@@ -206,6 +208,7 @@ def evaluate_model(model, data_loader, criterion=None, device='cuda', return_met
     
     all_preds = []
     all_labels = []
+    all_probs = []  # 新增，用於保存預測概率
     val_loss = 0.0
     val_correct = 0
     
@@ -240,8 +243,10 @@ def evaluate_model(model, data_loader, criterion=None, device='cuda', return_met
             batch_correct = (predicted == labels).sum().item()
             val_correct += batch_correct
             
+            # 保存預測結果和真實標籤
             all_preds.extend(predicted.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
+            all_probs.extend(outputs.squeeze().cpu().numpy())  # 新增保存預測概率
             
             # 記錄每個批次的指標
             batch_accuracy = batch_correct / len(labels)
@@ -271,6 +276,16 @@ def evaluate_model(model, data_loader, criterion=None, device='cuda', return_met
     # 如果只需要返回指標，不打印詳細信息
     if return_metrics:
         return val_loss, val_accuracy
+    
+    # 如果需要返回預測結果用於繪製ROC曲線
+    if return_predictions:
+        results = {
+            'accuracy': val_accuracy,
+            'loss': val_loss,
+            'memory_change': memory_change,
+            'evaluation_time': evaluation_time
+        }
+        return results, all_preds, all_labels, all_probs
     
     # 計算評估指標
     accuracy = accuracy_score(all_labels, all_preds)
@@ -377,7 +392,7 @@ def plot_training_history(train_losses, val_losses, val_accuracies, memory_usage
     ax2.plot(val_accuracies, label='驗證準確率')
     ax2.set_xlabel('訓練週期')
     ax2.set_ylabel('準確率')
-    ax2.set_title('驗證準確率變化')
+    ax2.setTitle('驗證準確率變化')
     ax2.legend()
 
     # 3. 記憶體使用量（按階段）
